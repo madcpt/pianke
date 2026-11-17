@@ -1,6 +1,8 @@
 // 非凡（苹果 CMS V10）片源适配。
-// 搜索/详情走用户自建的 Cloudflare Worker 代理（CMS 接口无 CORS）；
-// 视频 m3u8 由浏览器直连源站（播放域名已开放 CORS）。
+// 搜索/详情走自建的 Cloudflare Worker 代理（CMS 接口无 CORS）；
+// 视频 m3u8 由浏览器直连源站（播放域名通常已开放 CORS）。
+// 若非凡的播放域名被地域封锁/失效（如《谷雨》的 super.ffzy-online6.com），
+// movieDetails 会自动回退到备用源（360）的同名影片，保证仍能播放。
 
 const DEFAULT_PROXY = 'https://pianke-proxy.zhxu98.workers.dev'; // 自建 Cloudflare Worker 代理（见 README）
 let proxyBase = DEFAULT_PROXY;
@@ -78,6 +80,10 @@ function scoreLine(line) {
   return score;
 }
 
+function normalizeName(name) {
+  return String(name || '').replace(/\s+/g, '').toLowerCase();
+}
+
 function toMovie(item) {
   const episodes = parsePlayUrl(item);
   return {
@@ -101,6 +107,51 @@ export async function searchMovies(query, page = 1, signal) {
   return { items: list.map(toMovie), total, page };
 }
 
+// 探测播放地址是否真的可取（非凡部分域名被地域封锁，返回 403 的 HTML 而非 m3u8）。
+async function isPlayable(url, signal) {
+  try {
+    const controller = new AbortController();
+    const abort = () => controller.abort(signal.reason);
+    signal?.addEventListener('abort', abort, { once: true });
+    const timer = setTimeout(() => controller.abort(), 9000);
+    let response;
+    try {
+      response = await fetch(url, {
+        method: 'GET', mode: 'cors',
+        credentials: 'omit', referrerPolicy: 'no-referrer', signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+    }
+    if (!response.ok) return false;
+    const head = (await response.text()).slice(0, 20);
+    return head.includes('#EXTM3U');
+  } catch { return false; }
+}
+
+// 备用源（360）按片名找同名影片，取可播线路替换播放地址。
+async function fallbackUrls(name, year, originalUrls, signal) {
+  try {
+    const body = await request({ src: 'lianti', wd: name }, signal);
+    const list = body.list || [];
+    const target = list.find(item => normalizeName(item.vod_name) === normalizeName(name))
+      || list.find(item => normalizeName(item.vod_name).includes(normalizeName(name)))
+      || list[0];
+    if (!target) return null;
+    const detail = await request({ src: 'lianti', ac: 'detail', ids: target.vod_id }, signal);
+    const movie = toMovie((detail.list || [])[0] || {});
+    if (!movie.urls.length) return null;
+    if (!(await isPlayable(movie.urls[0].url, signal))) return null;
+    // 用备用源播放地址替换，集数标题保留备用源的顺序。
+    return movie.urls.map((episode, index) => ({
+      ...originalUrls[index],
+      ...episode,
+      index: originalUrls[index]?.index || index + 1,
+    }));
+  } catch { return null; }
+}
+
 export async function movieDetails(id, signal) {
   if (!/^\d+$/.test(String(id))) throw new Error('片源编号无效。');
   const body = await request({ ac: 'detail', ids: id }, signal);
@@ -108,6 +159,14 @@ export async function movieDetails(id, signal) {
   if (!item) throw new Error('没有找到这个片源，请返回重新搜索。');
   const movie = toMovie(item);
   if (!movie.urls.length) throw new Error('这个片源没有可用的 HTTPS 播放地址。');
+  // 非凡部分新片的播放域名被地域封锁；探测首集，不可播则自动切到备用源同名影片。
+  if (!(await isPlayable(movie.urls[0].url, signal))) {
+    const backup = await fallbackUrls(movie.name, movie.year, movie.urls, signal);
+    if (backup?.length) {
+      movie.urls = backup;
+      movie.pic = movie.pic || '';
+    }
+  }
   return movie;
 }
 

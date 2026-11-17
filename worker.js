@@ -1,8 +1,12 @@
-// Cloudflare Worker: 代理非凡 CMS 采集接口，给纯静态前端补上跨域头。
+// Cloudflare Worker: 代理 CMS 采集接口，给纯静态前端补上跨域头。
 // 视频流(m3u8)不经过此 Worker —— 播放域名本身已开放 CORS，浏览器直连。
+// 支持多个上游源：feifan(非凡) / lianti(360)，通过 src 参数选择。
 
-const UPSTREAM = 'https://cj.ffzyapi.com/api.php/provide/vod/';
-// 只允许你自己的站点使用，避免被他人盗用。部署后按需改成你的域名；留空表示放行所有来源。
+const UPSTREAMS = {
+  feifan: 'https://cj.ffzyapi.com/api.php/provide/vod/',
+  lianti: 'https://360zyzz.com/api.php/provide/vod/',
+};
+// 只允许你自己的站点使用，避免被他人盗用。留空表示放行所有来源。
 const ALLOWED_ORIGIN = 'https://madcpt.github.io';
 
 const CORS = {
@@ -30,7 +34,9 @@ export default {
     }
 
     const incoming = new URL(request.url);
-    const upstream = new URL(UPSTREAM);
+    const src = incoming.searchParams.get('src');
+    const upstreamBase = UPSTREAMS[src] || UPSTREAMS.feifan;
+    const upstream = new URL(upstreamBase);
     for (const key of PASSTHROUGH) {
       const value = incoming.searchParams.get(key);
       if (value !== null) upstream.searchParams.set(key, value);
@@ -40,7 +46,7 @@ export default {
       const response = await fetch(upstream.toString(), {
         headers: {
           'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
-          'Referer': 'https://cj.ffzyapi.com/',
+          'Referer': new URL(upstreamBase).origin + '/',
         },
         cf: { cacheTtl: 300, cacheEverything: true },
       });

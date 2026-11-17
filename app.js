@@ -1,0 +1,244 @@
+import { searchMovies, movieDetails, imageUrl, safeMediaUrl } from './api.js';
+const $ = id => document.getElementById(id);
+const video = $('video');
+let searchController, detailController, hls, selectedMovie, selectedEpisode;
+let query = '', page = 0, total = 0, shown = 0, streamVersion = 0;
+let resultsLoading = false, retrying = false, stalls = 0, loadingTimer;
+const help = $('help-dialog');
+const airplaySupported = typeof video.webkitShowPlaybackTargetPicker === 'function';
+const remoteSupported = !!video.remote && typeof video.remote.prompt === 'function';
+$('cast-label').textContent = airplaySupported ? 'AirPlay 投屏' : '投屏';
+$('help-button').addEventListener('click', () => help.showModal());
+$('close-help').addEventListener('click', () => help.close());
+$('help-done').addEventListener('click', () => help.close());
+help.addEventListener('click', event => { if (event.target === help) { const r = help.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) help.close(); } });
+
+$('cast-button').addEventListener('click', () => {
+  if (!selectedEpisode || !video.currentSrc) { help.showModal(); return; }
+  try {
+    if (airplaySupported) video.webkitShowPlaybackTargetPicker();
+    else if (remoteSupported) video.remote.prompt().catch(error => {
+      if (error.name !== 'NotAllowedError' && error.name !== 'AbortError') help.showModal();
+    });
+    else help.showModal();
+  } catch { help.showModal(); }
+});
+video.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', () => {
+  const connected = !!video.webkitCurrentPlaybackTargetIsWireless;
+  $('cast-button').classList.toggle('connected', connected);
+  $('cast-label').textContent = connected ? 'AirPlay 已连接' : 'AirPlay 投屏';
+});
+if (video.remote) {
+  for (const event of ['connect', 'disconnect']) video.remote.addEventListener(event, () => {
+    const connected = video.remote.state === 'connected';
+    $('cast-button').classList.toggle('connected', connected);
+    $('cast-label').textContent = connected ? '已连接大屏' : (airplaySupported ? 'AirPlay 投屏' : '投屏');
+  });
+}
+
+function overlay(text) {
+  $('video-overlay-text').textContent = text || '';
+  $('video-overlay').hidden = !text;
+}
+function videoError(text) {
+  clearTimeout(loadingTimer);
+  $('playback-error').textContent = text;
+  $('playback-error').hidden = !text;
+  if (text) { overlay(''); $('playback-status').textContent = '片源暂时无法播放'; }
+}
+function clearStream() {
+  streamVersion++;
+  clearTimeout(loadingTimer);
+  if (hls) { hls.destroy(); hls = null; }
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+}
+function closePlayer() {
+  detailController?.abort();
+  selectedMovie = selectedEpisode = null;
+  clearStream();
+  $('player-section').hidden = true;
+  document.body.classList.remove('video-active');
+  document.title = '片刻 · 搜索你想看的';
+}
+$('close-player').addEventListener('click', closePlayer);
+
+function startEpisode(episode, position = 0) {
+  clearStream();
+  selectedEpisode = episode;
+  retrying = false; stalls = 0;
+  const version = streamVersion;
+  videoError('');
+  overlay('正在连接片源…');
+  $('playback-status').textContent = '正在加载 · ' + episode.title;
+  for (const button of $('episodes').children) button.setAttribute('aria-pressed', String(Number(button.dataset.index) === episode.index));
+  const url = safeMediaUrl(episode.url);
+  if (!url) { videoError('这个片源没有可用的 HTTPS 视频地址，请选择其他剧集。'); return; }
+  // Native HLS keeps the actual HTTPS media URL on the video element, enabling AirPlay.
+  if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = url;
+    video.load();
+  } else if (globalThis.Hls?.isSupported()) {
+    hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, backBufferLength: 30, maxBufferSize: 30 * 1024 * 1024 });
+    const instance = hls;
+    hls.on(Hls.Events.ERROR, (_event, data) => {
+      if (version !== streamVersion || !data.fatal) return;
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && stalls++ < 2) {
+        $('playback-status').textContent = '网络不稳定，正在重试…';
+        instance.startLoad();
+      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && stalls++ < 2) instance.recoverMediaError();
+      else videoError('欧乐片源加载失败。请点“重新加载”，或稍后再试。');
+    });
+    hls.loadSource(url);
+    hls.attachMedia(video);
+  } else { videoError('当前浏览器不支持此视频格式，请使用 Safari 或新版 Chrome。'); return; }
+  loadingTimer = setTimeout(() => {
+    if (version === streamVersion && video.readyState < 2) videoError('视频加载较慢或片源不可用。请点击“重新加载”重试。');
+  }, 35000);
+  if (position > 0) video.addEventListener('loadedmetadata', () => {
+    if (version === streamVersion) video.currentTime = Math.min(position, Math.max(0, video.duration - 1));
+  }, { once: true });
+  video.play().catch(() => {
+    if (version !== streamVersion) return;
+    overlay('');
+    if (!video.error) $('playback-status').textContent = '点击视频中的播放按钮开始';
+  });
+}
+
+async function openMovie(id, trigger) {
+  detailController?.abort();
+  const controller = new AbortController(); detailController = controller;
+  clearStream();
+  selectedMovie = selectedEpisode = null;
+  $('player-section').hidden = false;
+  document.body.classList.add('video-active');
+  $('video-title').textContent = trigger?.dataset.name || '正在获取片源…';
+  $('video-meta').textContent = '';
+  $('episodes').replaceChildren(); $('episode-count').textContent = '';
+  $('playback-status').textContent = '正在获取播放地址…';
+  videoError(''); overlay('正在获取片源…');
+  $('player-section').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+  try {
+    const movie = await movieDetails(id, controller.signal);
+    if (controller.signal.aborted) return;
+    selectedMovie = movie;
+    $('video-title').textContent = movie.name;
+    document.title = `${movie.name} · 片刻`;
+    $('video-meta').textContent = [movie.year, movie.area, movie.typeIdName, movie.lang].filter(Boolean).join(' / ');
+    $('episode-count').textContent = `${movie.urls.length} 集`;
+    for (const episode of movie.urls) {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'episode';
+      button.textContent = episode.title || `第 ${episode.index} 集`;
+      button.dataset.index = episode.index; button.setAttribute('aria-pressed', 'false');
+      button.disabled = !!episode.vip || !safeMediaUrl(episode.url);
+      if (episode.vip) { button.textContent += ' · VIP'; button.title = '此片源需要欧乐会员'; }
+      button.addEventListener('click', () => startEpisode(episode));
+      $('episodes').append(button);
+    }
+    const first = movie.urls.find(episode => !episode.vip && safeMediaUrl(episode.url));
+    if (first) startEpisode(first);
+    else videoError('这个内容没有可直接播放的公开片源，可能需要欧乐会员。');
+  } catch (error) {
+    if (!controller.signal.aborted) videoError(error.message || '无法获取片源，请重试。');
+  }
+}
+
+$('retry-video').addEventListener('click', async () => {
+  if (!selectedMovie || !selectedEpisode || retrying) return;
+  retrying = true;
+  const movieId = selectedMovie.id, episodeIndex = selectedEpisode.index, position = video.currentTime || 0;
+  const version = streamVersion;
+  $('retry-video').disabled = true;
+  $('playback-status').textContent = '正在刷新片源…';
+  try {
+    const fresh = await movieDetails(movieId);
+    if (version !== streamVersion || selectedMovie?.id !== movieId) return;
+    selectedMovie = fresh;
+    const episode = fresh.urls.find(item => item.index === episodeIndex && !item.vip);
+    if (!episode) throw new Error('这个片源已不可用，请重新选择。');
+    startEpisode(episode, position);
+  } catch (error) { if (version === streamVersion) videoError(error.message); }
+  finally { retrying = false; $('retry-video').disabled = false; }
+});
+for (const event of ['loadedmetadata', 'canplay']) video.addEventListener(event, () => {
+  if (!selectedEpisode) return;
+  clearTimeout(loadingTimer); overlay('');
+  if (video.paused) $('playback-status').textContent = '已就绪 · 点击视频开始播放';
+});
+video.addEventListener('playing', () => { if (!selectedEpisode) return; clearTimeout(loadingTimer); overlay(''); videoError(''); $('playback-status').textContent = '正在播放 · ' + selectedEpisode.title; });
+video.addEventListener('waiting', () => { if (selectedEpisode) $('playback-status').textContent = '正在缓冲…'; });
+video.addEventListener('pause', () => { if (selectedEpisode && !video.ended) $('playback-status').textContent = '已暂停'; });
+video.addEventListener('error', () => { if (selectedEpisode && !hls && video.error) videoError('视频源暂时无法播放，请点“重新加载”重试。'); });
+video.addEventListener('ended', () => { $('playback-status').textContent = '本集播放结束'; });
+
+function appendResults(items) {
+  for (const item of items) {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'movie'; button.dataset.name = item.name;
+    button.setAttribute('aria-label', `播放 ${item.name}`);
+    const poster = document.createElement('div'); poster.className = 'poster';
+    const placeholder = document.createElement('span'); placeholder.className = 'poster-placeholder'; placeholder.textContent = '片刻'; placeholder.setAttribute('aria-hidden', 'true'); poster.append(placeholder);
+    const src = imageUrl(item);
+    if (src) {
+      const img = document.createElement('img'); img.src = src; img.alt = ''; img.loading = 'lazy'; img.referrerPolicy = 'no-referrer';
+      img.addEventListener('error', () => img.remove(), { once: true }); poster.append(img);
+    }
+    if (Number(item.score) > 0) { const score = document.createElement('span'); score.className = 'score'; score.textContent = Number(item.score).toFixed(1); poster.append(score); }
+    if (item.remarks || item.vip) { const remark = document.createElement('span'); remark.className = 'remark'; remark.textContent = [item.remarks, item.vip ? 'VIP' : ''].filter(Boolean).join(' · '); poster.append(remark); }
+    const title = document.createElement('h3'); title.textContent = item.name;
+    const meta = document.createElement('p'); meta.textContent = [item.year, item.area].filter(Boolean).join(' / ');
+    button.append(poster, title, meta); button.addEventListener('click', () => openMovie(item.id, button));
+    $('results').append(button);
+  }
+}
+
+async function runSearch(nextQuery, append = false) {
+  if (append && resultsLoading) return;
+  searchController?.abort();
+  const controller = new AbortController(); searchController = controller;
+  if (!append) {
+    query = nextQuery; page = 0; shown = 0; total = 0;
+    $('results').replaceChildren();
+    closePlayer();
+    const url = new URL(location.href); url.searchParams.set('q', query); history.replaceState(null, '', url);
+  }
+  resultsLoading = true;
+  $('load-more').disabled = true; $('search-button').setAttribute('aria-busy', 'true');
+  $('results-section').hidden = false; $('empty-state').hidden = true;
+  document.body.classList.add('has-results');
+  $('results-title').textContent = `“${query}”`;
+  $('results-count').textContent = '';
+  $('search-status').textContent = append ? '正在加载更多…' : '正在搜索欧乐片源…';
+  $('load-more').hidden = true;
+  try {
+    const result = await searchMovies(query, page + 1, controller.signal);
+    if (controller.signal.aborted) return;
+    page = result.page; total = result.total; shown += result.items.length;
+    appendResults(result.items);
+    $('results-count').textContent = `共 ${total} 部`;
+    $('search-status').textContent = shown ? '' : '没有找到相关片源，试试更短的片名或其他关键词。';
+    $('load-more').hidden = shown >= total || result.items.length === 0;
+    $('load-more').textContent = '加载更多 ↓';
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      $('search-status').textContent = error.message || '搜索失败，请稍后重试。';
+      $('load-more').hidden = false;
+      $('load-more').textContent = '重试搜索';
+    }
+  } finally {
+    if (!controller.signal.aborted) {
+      resultsLoading = false;
+      $('load-more').disabled = false;
+      $('search-button').removeAttribute('aria-busy');
+    }
+  }
+}
+$('search-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const value = $('query').value.trim();
+  if (value) runSearch(value);
+  else $('query').focus();
+});
+$('load-more').addEventListener('click', () => runSearch(query, true));
+const initialQuery = new URL(location.href).searchParams.get('q')?.trim().slice(0, 100);
+if (initialQuery) { $('query').value = initialQuery; runSearch(initialQuery); }

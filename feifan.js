@@ -2,7 +2,7 @@
 // 搜索/详情走用户自建的 Cloudflare Worker 代理（CMS 接口无 CORS）；
 // 视频 m3u8 由浏览器直连源站（播放域名已开放 CORS）。
 
-const DEFAULT_PROXY = ''; // 部署 worker.js 后，把 workers.dev 地址填到这里，例如 https://pianke-proxy.xxx.workers.dev
+const DEFAULT_PROXY = 'https://pianke-proxy.zhxu98.workers.dev'; // 自建 Cloudflare Worker 代理（见 README）
 let proxyBase = DEFAULT_PROXY;
 
 export function setProxyUrl(url) {

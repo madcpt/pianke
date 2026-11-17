@@ -1,6 +1,11 @@
 # 片刻
 
-一个只保留搜索、选集和播放的欧乐片源界面。无首页推荐、弹窗广告、广告 SDK、账号或追踪脚本。纯静态文件，可直接部署到 GitHub Pages。
+一个只保留搜索、选集和播放的界面。无首页推荐、弹窗广告、广告 SDK、账号或追踪脚本。纯静态文件，可直接部署到 GitHub Pages。支持两个片源：
+
+- **欧乐**（默认）：720P，速度快，接口开跨域，开箱即用无需配置。
+- **非凡**（可选）：1080P 高清，需配置一个免费代理（见下）。
+
+两个源都支持 iPhone/iPad Safari 的 AirPlay 投屏。
 
 ## 使用
 
@@ -20,9 +25,21 @@ python3 -m http.server 8080
 
 打开 `http://localhost:8080`。页面必须通过 HTTP(S) 访问，不能双击以 `file://` 打开。GitHub Pages 使用 HTTPS。
 
+## 启用非凡 1080P 片源（可选）
+
+非凡的采集接口不允许浏览器直接跨域访问，需要一个代理转发；视频 m3u8 地址本身开放 CORS，由浏览器直连，不经过代理。代理只转发搜索和详情的 JSON 请求。
+
+1. 用免费账号登录 [Cloudflare](https://dash.cloudflare.com/)，进入 **Workers & Pages → Create Worker**。
+2. 删除默认代码，把本仓库 `worker.js` 的全部内容粘贴进去，点 **Deploy**。
+3. 复制部署地址（形如 `https://pianke-proxy.xxx.workers.dev`）。
+4. 在网页点击搜索框下方的 **代理设置**，粘贴地址并保存；非凡源即启用。地址只存在浏览器 localStorage，不上传。
+
+如需限制代理只允许自己的站点使用，编辑 `worker.js` 顶部的 `ALLOWED_ORIGIN`。URL 加 `?src=feifan` 可默认进入非凡源，`?src=olevod` 回到欧乐源。
+
 ## 数据和兼容性
 
-- 搜索与详情直接请求欧乐网站使用的公开接口 `https://api.olelive.com`，未发送用户身份或 Cookie。
+- 欧乐：搜索与详情直接请求其公开接口 `https://api.olelive.com`，未发送用户身份或 Cookie。
+- 非凡：搜索与详情经自建 Cloudflare Worker 转发苹果 CMS V10 公开接口 `https://cj.ffzyapi.com`；播放地址与海报由浏览器直连源站。多集/多线路自动解析，优先选择 m3u8 线路。
 - 欧乐接口返回的公开视频地址由浏览器/电视直接拉取；不经开发电脑转发。
 - 接口每日数据编码与请求时间戳在 `api.js` 中处理。不请求首页推荐、广告接口，不嵌入原站页面或执行原站脚本。
 - 不提供登录或 VIP 解锁；会员片源显示为不可选。网站界面无广告；无法保证源视频本身不含嵌入广告。
@@ -35,4 +52,4 @@ python3 -m http.server 8080
 
 ## 验证
 
-`npm run check` 检查语法；`npm test` 测试请求编码、日期边界、数据解码和 URL 约束。真实欧乐搜索和播放需网络连接。AirPlay 端到端测试需要用户在真实 iPhone 的系统选择器中选择电视。
+`npm run check` 检查语法；`npm test` 测试请求编码、日期边界、数据解码、URL 约束和非凡线路解析（优先 m3u8、多集、非 HTTPS 过滤）。真实搜索和播放需网络连接；非凡需先配置代理。AirPlay 端到端测试需要用户在真实 iPhone 的系统选择器中选择电视。

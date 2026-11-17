@@ -1,4 +1,14 @@
-import { searchMovies, movieDetails, imageUrl, safeMediaUrl } from './api.js';
+import * as olevod from './api.js';
+import * as feifan from './feifan.js';
+
+// 片源注册表：默认欧乐（开跨域、速度快）；非凡为可选 1080P 源，需配置代理。
+const SOURCES = {
+  olevod: { label: '欧乐', adapter: olevod, needsProxy: false },
+  feifan: { label: '非凡', adapter: feifan, needsProxy: true },
+};
+let currentSource = 'olevod';
+const active = () => SOURCES[currentSource].adapter;
+
 const $ = id => document.getElementById(id);
 const video = $('video');
 let searchController, detailController, hls, selectedMovie, selectedEpisode;
@@ -73,7 +83,7 @@ function startEpisode(episode, position = 0) {
   overlay('正在连接片源…');
   $('playback-status').textContent = '正在加载 · ' + episode.title;
   for (const button of $('episodes').children) button.setAttribute('aria-pressed', String(Number(button.dataset.index) === episode.index));
-  const url = safeMediaUrl(episode.url);
+  const url = active().safeMediaUrl(episode.url);
   if (!url) { videoError('这个片源没有可用的 HTTPS 视频地址，请选择其他剧集。'); return; }
   // Native HLS keeps the actual HTTPS media URL on the video element, enabling AirPlay.
   if (video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -88,7 +98,7 @@ function startEpisode(episode, position = 0) {
         $('playback-status').textContent = '网络不稳定，正在重试…';
         instance.startLoad();
       } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR && stalls++ < 2) instance.recoverMediaError();
-      else videoError('欧乐片源加载失败。请点“重新加载”，或稍后再试。');
+      else videoError(`${SOURCES[currentSource].label}片源加载失败。请点“重新加载”，或稍后再试。`);
     });
     hls.loadSource(url);
     hls.attachMedia(video);
@@ -120,7 +130,7 @@ async function openMovie(id, trigger) {
   videoError(''); overlay('正在获取片源…');
   $('player-section').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
   try {
-    const movie = await movieDetails(id, controller.signal);
+    const movie = await active().movieDetails(id, controller.signal);
     if (controller.signal.aborted) return;
     selectedMovie = movie;
     $('video-title').textContent = movie.name;
@@ -131,14 +141,14 @@ async function openMovie(id, trigger) {
       const button = document.createElement('button'); button.type = 'button'; button.className = 'episode';
       button.textContent = episode.title || `第 ${episode.index} 集`;
       button.dataset.index = episode.index; button.setAttribute('aria-pressed', 'false');
-      button.disabled = !!episode.vip || !safeMediaUrl(episode.url);
-      if (episode.vip) { button.textContent += ' · VIP'; button.title = '此片源需要欧乐会员'; }
+      button.disabled = !!episode.vip || !active().safeMediaUrl(episode.url);
+      if (episode.vip) { button.textContent += ' · VIP'; button.title = '此片源需要会员'; }
       button.addEventListener('click', () => startEpisode(episode));
       $('episodes').append(button);
     }
-    const first = movie.urls.find(episode => !episode.vip && safeMediaUrl(episode.url));
+    const first = movie.urls.find(episode => !episode.vip && active().safeMediaUrl(episode.url));
     if (first) startEpisode(first);
-    else videoError('这个内容没有可直接播放的公开片源，可能需要欧乐会员。');
+    else videoError('这个内容没有可直接播放的公开片源，可能需要会员。');
   } catch (error) {
     if (!controller.signal.aborted) videoError(error.message || '无法获取片源，请重试。');
   }
@@ -152,7 +162,7 @@ $('retry-video').addEventListener('click', async () => {
   $('retry-video').disabled = true;
   $('playback-status').textContent = '正在刷新片源…';
   try {
-    const fresh = await movieDetails(movieId);
+    const fresh = await active().movieDetails(movieId);
     if (version !== streamVersion || selectedMovie?.id !== movieId) return;
     selectedMovie = fresh;
     const episode = fresh.urls.find(item => item.index === episodeIndex && !item.vip);
@@ -178,7 +188,7 @@ function appendResults(items) {
     button.setAttribute('aria-label', `播放 ${item.name}`);
     const poster = document.createElement('div'); poster.className = 'poster';
     const placeholder = document.createElement('span'); placeholder.className = 'poster-placeholder'; placeholder.textContent = '片刻'; placeholder.setAttribute('aria-hidden', 'true'); poster.append(placeholder);
-    const src = imageUrl(item);
+    const src = active().imageUrl(item);
     if (src) {
       const img = document.createElement('img'); img.src = src; img.alt = ''; img.loading = 'lazy'; img.referrerPolicy = 'no-referrer';
       img.addEventListener('error', () => img.remove(), { once: true }); poster.append(img);
@@ -208,10 +218,10 @@ async function runSearch(nextQuery, append = false) {
   document.body.classList.add('has-results');
   $('results-title').textContent = `“${query}”`;
   $('results-count').textContent = '';
-  $('search-status').textContent = append ? '正在加载更多…' : '正在搜索欧乐片源…';
+  $('search-status').textContent = append ? '正在加载更多…' : `正在搜索${SOURCES[currentSource].label}片源…`;
   $('load-more').hidden = true;
   try {
-    const result = await searchMovies(query, page + 1, controller.signal);
+    const result = await active().searchMovies(query, page + 1, controller.signal);
     if (controller.signal.aborted) return;
     page = result.page; total = result.total; shown += result.items.length;
     appendResults(result.items);
@@ -240,5 +250,61 @@ $('search-form').addEventListener('submit', event => {
   else $('query').focus();
 });
 $('load-more').addEventListener('click', () => runSearch(query, true));
-const initialQuery = new URL(location.href).searchParams.get('q')?.trim().slice(0, 100);
+
+// ---- 片源切换与代理配置 ----
+const proxyDialog = $('proxy-dialog');
+const proxyInput = $('proxy-url');
+const sourceTabs = document.querySelectorAll('[data-source]');
+
+function savedProxy() {
+  try { return localStorage.getItem('pianke-feifan-proxy') || ''; } catch { return ''; }
+}
+function applySavedProxy() {
+  const saved = savedProxy();
+  if (saved) { try { feifan.setProxyUrl(saved); } catch { /* ignore stale value */ } }
+}
+function setActiveSource(name) {
+  if (!SOURCES[name]) return;
+  currentSource = name;
+  for (const tab of sourceTabs) tab.setAttribute('aria-pressed', String(tab.dataset.source === name));
+  const needsSetup = SOURCES[name].needsProxy && !feifan.isProxyConfigured();
+  $('source-note').textContent = needsSetup
+    ? '非凡为 1080P 高清源，需先配置一个免费代理（见下方说明）。'
+    : (name === 'feifan' ? '非凡 · 1080P 高清片源' : '欧乐 · 速度快、无需配置');
+  if (query) runSearch(query);
+}
+for (const tab of sourceTabs) {
+  tab.addEventListener('click', () => {
+    const name = tab.dataset.source;
+    setActiveSource(name);
+    if (SOURCES[name].needsProxy && !feifan.isProxyConfigured()) proxyDialog.showModal();
+  });
+}
+$('proxy-open').addEventListener('click', () => { proxyInput.value = savedProxy(); proxyDialog.showModal(); });
+$('proxy-close').addEventListener('click', () => proxyDialog.close());
+$('proxy-done').addEventListener('click', () => proxyDialog.close());
+$('proxy-save').addEventListener('click', () => {
+  try {
+    const value = proxyInput.value.trim();
+    if (!value) throw new Error('请输入代理地址。');
+    feifan.setProxyUrl(value);
+    try { localStorage.setItem('pianke-feifan-proxy', feifan.getProxyUrl()); } catch { /* storage disabled */ }
+    proxyDialog.close();
+    setActiveSource('feifan');
+  } catch (error) {
+    $('proxy-error').textContent = error.message;
+  }
+});
+
+applySavedProxy();
+const params = new URL(location.href).searchParams;
+const initialSource = params.get('src');
+if (initialSource && SOURCES[initialSource]) {
+  currentSource = initialSource;
+  for (const tab of sourceTabs) tab.setAttribute('aria-pressed', String(tab.dataset.source === currentSource));
+}
+$('source-note').textContent = currentSource === 'feifan'
+  ? '非凡 · 1080P 高清片源'
+  : '欧乐 · 速度快、无需配置';
+const initialQuery = params.get('q')?.trim().slice(0, 100);
 if (initialQuery) { $('query').value = initialQuery; runSearch(initialQuery); }

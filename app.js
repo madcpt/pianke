@@ -316,7 +316,13 @@ $('load-more').addEventListener('click', () => runSearch(query, true));
 // ---- 片源切换与代理配置 ----
 const proxyDialog = $('proxy-dialog');
 const proxyInput = $('proxy-url');
+const proxyError = $('proxy-error');
 const sourceTabs = document.querySelectorAll('[data-source]');
+
+function showProxyError(text) {
+  proxyError.textContent = text || '';
+  proxyError.hidden = !text;
+}
 
 function savedProxy() {
   try { return localStorage.getItem('pianke-feifan-proxy') || ''; } catch { return ''; }
@@ -339,10 +345,10 @@ for (const tab of sourceTabs) {
   tab.addEventListener('click', () => {
     const name = tab.dataset.source;
     setActiveSource(name);
-    if (SOURCES[name].needsProxy && !feifan.isProxyConfigured()) proxyDialog.showModal();
+    if (SOURCES[name].needsProxy && !feifan.isProxyConfigured()) { showProxyError(''); proxyDialog.showModal(); }
   });
 }
-$('proxy-open').addEventListener('click', () => { proxyInput.value = savedProxy(); proxyDialog.showModal(); });
+$('proxy-open').addEventListener('click', () => { proxyInput.value = savedProxy(); showProxyError(''); proxyDialog.showModal(); });
 $('proxy-close').addEventListener('click', () => proxyDialog.close());
 $('proxy-done').addEventListener('click', () => proxyDialog.close());
 $('proxy-save').addEventListener('click', () => {
@@ -351,10 +357,11 @@ $('proxy-save').addEventListener('click', () => {
     if (!value) throw new Error('请输入代理地址。');
     feifan.setProxyUrl(value);
     try { localStorage.setItem('pianke-feifan-proxy', feifan.getProxyUrl()); } catch { /* storage disabled */ }
+    showProxyError('');
     proxyDialog.close();
     setActiveSource('feifan');
   } catch (error) {
-    $('proxy-error').textContent = error.message;
+    showProxyError(error.message);
   }
 });
 

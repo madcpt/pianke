@@ -1,6 +1,10 @@
-// Cloudflare Worker: 代理 CMS 采集接口，给纯静态前端补上跨域头。
+// Cloudflare Worker: 代理 CMS 采集接口 + 邀请码访问控制。
 // 视频流(m3u8)不经过此 Worker —— 播放域名本身已开放 CORS，浏览器直连。
 // 支持多个上游源：feifan(非凡) / lianti(360)，通过 src 参数选择。
+//
+// 访问控制：真实邀请码保存在 Worker 的 Secret 变量 INVITE_CODE 中，
+// 不写在此文件里（此文件的源码在公开仓库中）。每个请求必须带 ?k=<邀请码>；
+// ?verify=1&k=<邀请码> 是纯校验端点，不访问上游，供前端解锁时使用。
 
 const UPSTREAMS = {
   feifan: 'https://cj.ffzyapi.com/api.php/provide/vod/',
@@ -19,8 +23,19 @@ const CORS = {
 // 只透传这些参数，防止接口被当成任意 URL 转发器。
 const PASSTHROUGH = new Set(['wd', 'ac', 'ids', 'pg', 'pagesize', 'h', 't']);
 
+function json(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      ...CORS,
+    },
+  });
+}
+
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS });
     }
@@ -34,6 +49,21 @@ export default {
     }
 
     const incoming = new URL(request.url);
+
+    // 邀请码从 Secret 读取；未配置时不拦截（便于本地开发调试）。
+    const expected = String(env?.INVITE_CODE || '').trim();
+    const provided = (incoming.searchParams.get('k') || '').trim();
+    const authed = !expected || (provided && provided === expected);
+
+    // 纯校验端点：只判断邀请码是否正确，不访问上游、不缓存结果。
+    if (incoming.searchParams.get('verify') === '1') {
+      return authed ? json({ ok: true }) : json({ ok: false, error: 'invalid invite code' }, 403);
+    }
+
+    if (!authed) {
+      return json({ error: 'invalid invite code' }, 403);
+    }
+
     const src = incoming.searchParams.get('src');
     const upstreamBase = UPSTREAMS[src] || UPSTREAMS.feifan;
     const upstream = new URL(upstreamBase);
@@ -60,10 +90,7 @@ export default {
         },
       });
     } catch (error) {
-      return new Response(JSON.stringify({ error: 'upstream unavailable', detail: String(error) }), {
-        status: 502,
-        headers: { 'Content-Type': 'application/json; charset=utf-8', ...CORS },
-      });
+      return json({ error: 'upstream unavailable', detail: String(error) }, 502);
     }
   },
 };

@@ -14,6 +14,22 @@
   <script type="module" src="./app.js"></script>
 </head>
 <body>
+  <div id="gate" class="gate" role="dialog" aria-modal="true" aria-labelledby="gate-title">
+    <div class="gate-card">
+      <div class="gate-mark" aria-hidden="true">▰</div>
+      <p class="eyebrow"><span></span> INVITED ACCESS</p>
+      <h1 id="gate-title">留一点时间，<br><em>给想看的故事。</em></h1>
+      <p class="gate-copy">这是一个私人站点。请使用朋友分享的专属链接打开，或输入访问码进入。</p>
+      <form id="gate-form" autocomplete="off">
+        <label class="sr-only" for="gate-code">访问码</label>
+        <input id="gate-code" type="text" placeholder="输入访问码" maxlength="64" spellcheck="false" autocapitalize="off" required>
+        <p id="gate-error" class="error-message" role="alert" hidden></p>
+        <button id="gate-submit" class="primary" type="submit">进入 <span aria-hidden="true">↗</span></button>
+      </form>
+      <p class="gate-foot">没有访问码？向分享者索取专属链接。</p>
+    </div>
+  </div>
+
   <header class="topbar">
     <a class="brand" href="./" aria-label="片刻，返回搜索"><span class="brand-icon" aria-hidden="true">▰</span>片刻<span class="brand-en">PIANKE</span></a>
     <button id="help-button" class="quiet-button" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16V5h16v11M8 20l4-5 4 5z"/></svg>投屏说明</button>

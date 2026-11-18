@@ -6,6 +6,8 @@
 
 const DEFAULT_PROXY = 'https://pianke-proxy.zhxu98.workers.dev'; // 自建 Cloudflare Worker 代理（见 README）
 let proxyBase = DEFAULT_PROXY;
+let inviteCode = '';
+let authFailed = false;
 
 export function setProxyUrl(url) {
   try {
@@ -16,11 +18,44 @@ export function setProxyUrl(url) {
 }
 export function getProxyUrl() { return proxyBase; }
 export function isProxyConfigured() { return !!proxyBase; }
+export function setInviteCode(code) { inviteCode = String(code || '').trim(); authFailed = false; }
+
+// 校验邀请码是否正确（走 Worker 的 verify 端点，不访问上游）。
+export async function verifyInvite(code, signal) {
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal?.reason);
+  signal?.addEventListener('abort', abort, { once: true });
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const url = new URL(proxyBase);
+    url.searchParams.set('verify', '1');
+    url.searchParams.set('k', String(code || '').trim());
+    const response = await fetch(url.toString(), {
+      mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer', signal: controller.signal,
+    });
+    if (response.status === 403) return false;
+    if (!response.ok) throw new Error('验证服务暂时不可用，请稍后重试。');
+    const body = await response.json();
+    return !!body.ok;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    throw error.name === 'AbortError'
+      ? new Error('验证超时，请检查网络后重试。')
+      : (error instanceof TypeError
+        ? new Error('无法连接验证服务，请检查网络后重试。')
+        : error);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
+  }
+}
 
 async function request(params, signal) {
   if (!proxyBase) throw new Error('请先配置代理地址（见 README 的部署步骤）。');
+  if (authFailed) throw new Error('邀请码已失效，请重新验证。');
   const url = new URL(proxyBase);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
+  if (inviteCode) url.searchParams.set('k', inviteCode);
   const controller = new AbortController();
   const abort = () => controller.abort(signal.reason);
   signal?.addEventListener('abort', abort, { once: true });
@@ -29,6 +64,10 @@ async function request(params, signal) {
     const response = await fetch(url.toString(), {
       mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer', signal: controller.signal,
     });
+    if (response.status === 403) {
+      authFailed = true;
+      throw new Error('访问码无效或已失效，请重新进入。');
+    }
     if (!response.ok) throw new Error(`非凡代理暂时不可用（${response.status}）。`);
     const body = await response.json();
     if (body.error || body.code !== 1) throw new Error('非凡接口返回异常，请稍后重试。');

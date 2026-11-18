@@ -11,6 +11,68 @@ const active = () => SOURCES[currentSource].adapter;
 
 const $ = id => document.getElementById(id);
 const video = $('video');
+
+// ---- 访问码门禁 ----
+// 专属链接形如 ?k=访问码；校验通过后把码存本地，之后自动解锁。
+// 校验完全交给 Worker（真码只在 Worker 的 Secret 里），前端不存储任何明文对比值。
+const INVITE_KEY = 'pianke-invite';
+const gate = $('gate');
+const gateForm = $('gate-form');
+const gateInput = $('gate-code');
+const gateError = $('gate-error');
+const gateSubmit = $('gate-submit');
+let unlocked = false;
+
+function showGateError(text) {
+  gateError.textContent = text || '';
+  gateError.hidden = !text;
+}
+
+function rememberInvite(code) {
+  try { localStorage.setItem(INVITE_KEY, code); } catch { /* storage disabled */ }
+}
+function forgetInvite() {
+  try { localStorage.removeItem(INVITE_KEY); } catch { /* storage disabled */ }
+}
+function storedInvite() {
+  try { return localStorage.getItem(INVITE_KEY) || ''; } catch { return ''; }
+}
+
+async function unlockWith(code) {
+  const value = String(code || '').trim().slice(0, 64);
+  if (!value) { showGateError('请输入访问码。'); return; }
+  gateSubmit.disabled = true;
+  gateSubmit.textContent = '验证中…';
+  showGateError('');
+  try {
+    const ok = await feifan.verifyInvite(value);
+    if (!ok) {
+      forgetInvite();
+      showGateError('访问码不正确，请检查后重试。');
+      return;
+    }
+    feifan.setInviteCode(value);
+    rememberInvite(value);
+    unlocked = true;
+    gate.hidden = true;
+    document.body.classList.remove('locked');
+    // 从地址栏移除 k，避免访问码留在链接/历史里
+    const url = new URL(location.href);
+    if (url.searchParams.has('k')) { url.searchParams.delete('k'); history.replaceState(null, '', url); }
+    bootstrap();
+  } catch (error) {
+    showGateError(error.message || '验证失败，请稍后重试。');
+  } finally {
+    gateSubmit.disabled = false;
+    gateSubmit.innerHTML = '进入 <span aria-hidden="true">↗</span>';
+  }
+}
+
+gateForm.addEventListener('submit', event => {
+  event.preventDefault();
+  unlockWith(gateInput.value);
+});
+
 let searchController, detailController, hls, selectedMovie, selectedEpisode;
 let query = '', page = 0, total = 0, shown = 0, streamVersion = 0;
 let resultsLoading = false, retrying = false, stalls = 0, loadingTimer;
@@ -296,15 +358,48 @@ $('proxy-save').addEventListener('click', () => {
   }
 });
 
-applySavedProxy();
-const params = new URL(location.href).searchParams;
-const initialSource = params.get('src');
-if (initialSource && SOURCES[initialSource]) {
-  currentSource = initialSource;
-  for (const tab of sourceTabs) tab.setAttribute('aria-pressed', String(tab.dataset.source === currentSource));
+function bootstrap() {
+  applySavedProxy();
+  const params = new URL(location.href).searchParams;
+  const initialSource = params.get('src');
+  if (initialSource && SOURCES[initialSource]) {
+    currentSource = initialSource;
+    for (const tab of sourceTabs) tab.setAttribute('aria-pressed', String(tab.dataset.source === currentSource));
+  }
+  $('source-note').textContent = currentSource === 'feifan'
+    ? '非凡 · 1080P 高清片源'
+    : '欧乐 · 速度快、无需配置';
+  const initialQuery = params.get('q')?.trim().slice(0, 100);
+  if (initialQuery) { $('query').value = initialQuery; runSearch(initialQuery); }
 }
-$('source-note').textContent = currentSource === 'feifan'
-  ? '非凡 · 1080P 高清片源'
-  : '欧乐 · 速度快、无需配置';
-const initialQuery = params.get('q')?.trim().slice(0, 100);
-if (initialQuery) { $('query').value = initialQuery; runSearch(initialQuery); }
+
+// 未在门禁文件中直接内联邀请码；校验一律通过 Worker 完成。
+document.body.classList.add('locked');
+const urlParams = new URL(location.href).searchParams;
+const linkCode = urlParams.get('k')?.trim();
+const savedCode = storedInvite();
+if (linkCode) {
+  gateInput.value = linkCode;
+  unlockWith(linkCode);
+} else if (savedCode) {
+  // 本地有码：静默复核（真码可能已改），失败则回落到手动输入。
+  (async () => {
+    try {
+      const ok = await feifan.verifyInvite(savedCode);
+      if (ok) {
+        feifan.setInviteCode(savedCode);
+        unlocked = true;
+        gate.hidden = true;
+        document.body.classList.remove('locked');
+        bootstrap();
+      } else {
+        forgetInvite();
+        gate.hidden = false;
+      }
+    } catch {
+      gate.hidden = false;
+    }
+  })();
+} else {
+  gate.hidden = false;
+}

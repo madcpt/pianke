@@ -46,11 +46,11 @@
         <button id="search-button" class="primary" type="submit">搜索<span aria-hidden="true">↗</span></button>
       </form>
       <div class="source-bar" role="group" aria-label="选择片源">
-        <button type="button" class="source-tab" data-source="olevod" aria-pressed="true">欧乐 <span>流畅</span></button>
-        <button type="button" class="source-tab" data-source="feifan" aria-pressed="false">非凡 <span>1080P</span></button>
+        <button type="button" class="source-tab" data-source="olevod" aria-pressed="false">欧乐 <span>流畅</span></button>
+        <button type="button" class="source-tab" data-source="feifan" aria-pressed="true">非凡 <span>1080P</span></button>
         <button type="button" id="proxy-open" class="proxy-link" title="配置非凡代理">代理设置</button>
       </div>
-      <p id="source-note" class="source-note">欧乐 · 速度快、无需配置</p>
+      <p id="source-note" class="source-note">非凡 · 1080P 高清片源</p>
       <div class="under-search"><span>无广告界面</span><span class="dot">·</span><span>支持 AirPlay</span><span class="dot">·</span><span>多片源切换</span></div>
     </section>
 
@@ -99,7 +99,7 @@
     <label class="sr-only" for="proxy-url">代理地址</label>
     <input id="proxy-url" type="url" placeholder="https://xxx.workers.dev" spellcheck="false">
     <p id="proxy-error" class="error-message" role="alert" hidden></p>
-    <p class="muted">详细图文步骤见仓库 README。不配置也不影响默认的欧乐片源。</p>
+    <p class="muted">详细图文步骤见仓库 README。一般无需配置，页面已内置可用代理；欧乐片源也不依赖代理。</p>
     <div class="dialog-actions"><button id="proxy-done" type="button" class="quiet-button">取消</button><button id="proxy-save" type="button" class="primary">保存并启用</button></div>
   </dialog>
 </body>

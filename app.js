@@ -1,12 +1,13 @@
 import * as olevod from './api.js';
 import * as feifan from './feifan.js';
 
-// 片源注册表：默认欧乐（开跨域、速度快）；非凡为可选 1080P 源，需配置代理。
+// 片源注册表：默认非凡（1080P 高清）；欧乐为备选（开跨域、速度快）。
+// 非凡部分播放域名有地域封锁，movieDetails 会自动回退到 360 源同名影片。
 const SOURCES = {
   olevod: { label: '欧乐', adapter: olevod, needsProxy: false },
   feifan: { label: '非凡', adapter: feifan, needsProxy: true },
 };
-let currentSource = 'olevod';
+let currentSource = 'feifan';
 const active = () => SOURCES[currentSource].adapter;
 
 const $ = id => document.getElementById(id);

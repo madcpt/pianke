@@ -1,11 +1,13 @@
 import * as olevod from './api.js';
 import * as feifan from './feifan.js';
 
-// 片源注册表：默认非凡（1080P 高清）；欧乐为备选（开跨域、速度快）。
+// 片源注册表：默认非凡（1080P 高清）；欧乐、360 为备选。
+// 三源共用同一道门禁；非凡/360 经同一 Worker 代理（src 区分上游）。
 // 非凡部分播放域名有地域封锁，movieDetails 会自动回退到 360 源同名影片。
 const SOURCES = {
-  olevod: { label: '欧乐', adapter: olevod, needsProxy: false },
-  feifan: { label: '非凡', adapter: feifan, needsProxy: true },
+  olevod: { label: '欧乐', adapter: olevod, needsProxy: false, note: '欧乐 · 速度快、无需配置' },
+  feifan: { label: '非凡', adapter: feifan, needsProxy: true, note: '非凡 · 1080P 高清片源' },
+  lianti: { label: '360', adapter: feifan.lianti, needsProxy: true, note: '360 · 备用高清源、直连可播' },
 };
 let currentSource = 'feifan';
 const active = () => SOURCES[currentSource].adapter;
@@ -338,8 +340,8 @@ function setActiveSource(name) {
   for (const tab of sourceTabs) tab.setAttribute('aria-pressed', String(tab.dataset.source === name));
   const needsSetup = SOURCES[name].needsProxy && !feifan.isProxyConfigured();
   $('source-note').textContent = needsSetup
-    ? '非凡为 1080P 高清源，需先配置一个免费代理（见下方说明）。'
-    : (name === 'feifan' ? '非凡 · 1080P 高清片源' : '欧乐 · 速度快、无需配置');
+    ? `${SOURCES[name].label}源需先配置一个免费代理（见下方说明）。`
+    : SOURCES[name].note;
   if (query) runSearch(query);
 }
 for (const tab of sourceTabs) {
@@ -374,9 +376,7 @@ function bootstrap() {
     currentSource = initialSource;
     for (const tab of sourceTabs) tab.setAttribute('aria-pressed', String(tab.dataset.source === currentSource));
   }
-  $('source-note').textContent = currentSource === 'feifan'
-    ? '非凡 · 1080P 高清片源'
-    : '欧乐 · 速度快、无需配置';
+  $('source-note').textContent = SOURCES[currentSource].note;
   const initialQuery = params.get('q')?.trim().slice(0, 100);
   if (initialQuery) { $('query').value = initialQuery; runSearch(initialQuery); }
 }

@@ -1,6 +1,7 @@
-// 非凡（苹果 CMS V10）片源适配。
+// 非凡 / 360（苹果 CMS V10）片源适配。
 // 搜索/详情走自建的 Cloudflare Worker 代理（CMS 接口无 CORS）；
 // 视频 m3u8 由浏览器直连源站（播放域名通常已开放 CORS）。
+// 两源共用同一代理、邀请码与解析逻辑，仅上游不同（src=feifan / src=lianti）。
 // 若非凡的播放域名被地域封锁/失效（如《谷雨》的 super.ffzy-online6.com），
 // movieDetails 会自动回退到备用源（360）的同名影片，保证仍能播放。
 
@@ -68,14 +69,14 @@ async function request(params, signal) {
       authFailed = true;
       throw new Error('访问码无效或已失效，请重新进入。');
     }
-    if (!response.ok) throw new Error(`非凡代理暂时不可用（${response.status}）。`);
+    if (!response.ok) throw new Error(`片源代理暂时不可用（${response.status}）。`);
     const body = await response.json();
-    if (body.error || body.code !== 1) throw new Error('非凡接口返回异常，请稍后重试。');
+    if (body.error || body.code !== 1) throw new Error('片源接口返回异常，请稍后重试。');
     return body;
   } catch (error) {
     if (signal?.aborted) throw error;
     throw error.name === 'AbortError'
-      ? new Error('连接非凡代理超时，请检查网络后重试。')
+      ? new Error('连接片源代理超时，请检查网络后重试。')
       : error;
   } finally {
     clearTimeout(timer);
@@ -139,11 +140,15 @@ function toMovie(item) {
   };
 }
 
-export async function searchMovies(query, page = 1, signal) {
-  const body = await request({ wd: query, pg: page, pagesize: 20 }, signal);
+async function searchFrom(src, query, page, signal) {
+  const body = await request({ src, wd: query, pg: page, pagesize: 20 }, signal);
   const list = body.list || [];
   const total = Number(body.total || 0);
   return { items: list.map(toMovie), total, page };
+}
+
+export async function searchMovies(query, page = 1, signal) {
+  return searchFrom('feifan', query, page, signal);
 }
 
 // 探测播放地址是否真的可取（非凡部分域名被地域封锁，返回 403 的 HTML 而非 m3u8）。
@@ -191,15 +196,16 @@ async function fallbackUrls(name, year, originalUrls, signal) {
   } catch { return null; }
 }
 
-export async function movieDetails(id, signal) {
+async function detailsFrom(src, id, signal, mayFallback) {
   if (!/^\d+$/.test(String(id))) throw new Error('片源编号无效。');
-  const body = await request({ ac: 'detail', ids: id }, signal);
+  const body = await request({ src, ac: 'detail', ids: id }, signal);
   const item = (body.list || [])[0];
   if (!item) throw new Error('没有找到这个片源，请返回重新搜索。');
   const movie = toMovie(item);
   if (!movie.urls.length) throw new Error('这个片源没有可用的 HTTPS 播放地址。');
   // 非凡部分新片的播放域名被地域封锁；探测首集，不可播则自动切到备用源同名影片。
-  if (!(await isPlayable(movie.urls[0].url, signal))) {
+  // 360 源本身就是备用源，不需要再次回退。
+  if (mayFallback && !(await isPlayable(movie.urls[0].url, signal))) {
     const backup = await fallbackUrls(movie.name, movie.year, movie.urls, signal);
     if (backup?.length) {
       movie.urls = backup;
@@ -208,6 +214,19 @@ export async function movieDetails(id, signal) {
   }
   return movie;
 }
+
+export async function movieDetails(id, signal) {
+  return detailsFrom('feifan', id, signal, true);
+}
+
+// 360（联体）源适配器：与非凡共用代理、邀请码和解析逻辑，仅上游不同（src=lianti）。
+// 视频域名实测可直接播放，无需回退。
+export const lianti = {
+  searchMovies: (query, page = 1, signal) => searchFrom('lianti', query, page, signal),
+  movieDetails: (id, signal) => detailsFrom('lianti', id, signal, false),
+  imageUrl,
+  safeMediaUrl,
+};
 
 export function imageUrl(item) {
   const value = item.pic;

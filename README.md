@@ -1,11 +1,12 @@
 # 片刻
 
-一个只保留搜索、选集和播放的界面。无首页推荐、弹窗广告、广告 SDK、账号或追踪脚本。纯静态文件，可直接部署到 GitHub Pages。支持两个片源：
+一个只保留搜索、选集和播放的界面。无首页推荐、弹窗广告、广告 SDK、账号或追踪脚本。纯静态文件，可直接部署到 GitHub Pages。支持三个片源：
 
 - **非凡**（默认）：1080P 高清，搜索/详情经内置 Cloudflare Worker 代理；部分播放域名有地域封锁，会自动回退到 360 源同名影片。
+- **360**（备选）：备用高清源，与非凡共用同一代理，视频域名可直连播放。
 - **欧乐**（备选）：720P，速度快，接口开跨域，开箱即用无需配置。
 
-两个源都支持 iPhone/iPad Safari 的 AirPlay 投屏。
+三个源都支持 iPhone/iPad Safari 的 AirPlay 投屏。
 
 ## 使用
 
@@ -34,7 +35,7 @@ python3 -m http.server 8080
 3. 复制部署地址（形如 `https://pianke-proxy.xxx.workers.dev`）。
 4. 在网页点击搜索框下方的 **代理设置**，粘贴地址并保存；非凡源即启用。地址只存在浏览器 localStorage，不上传。
 
-如需限制代理只允许自己的站点使用，编辑 `worker.js` 顶部的 `ALLOWED_ORIGIN`。URL 加 `?src=feifan` 可默认进入非凡源，`?src=olevod` 回到欧乐源。
+如需限制代理只允许自己的站点使用，编辑 `worker.js` 顶部的 `ALLOWED_ORIGIN`。URL 加 `?src=feifan` 默认进入非凡，`?src=lianti` 进入 360 源，`?src=olevod` 回到欧乐源。非凡和 360 共用这一个代理，无需分别配置。
 
 ## 访问码（私人分享）
 
